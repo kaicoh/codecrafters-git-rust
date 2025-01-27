@@ -3,11 +3,12 @@ mod blob;
 use super::{Error, Result, GIT_OBJ_DIR};
 use blob::Blob;
 use bytes::Bytes;
-use flate2::read::ZlibDecoder;
+use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
+use sha1::{Digest, Sha1};
 use std::fmt;
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GitObject {
@@ -19,12 +20,54 @@ impl GitObject {
         Self::path(hash).and_then(Self::open)
     }
 
-    fn path(hash: &str) -> Result<String> {
+    pub fn new_blob<R: Read>(mut content: R) -> Result<Self> {
+        let mut buf = vec![];
+        content.read_to_end(&mut buf)?;
+        Ok(Self::Blob(Blob::from(Bytes::from_iter(buf))))
+    }
+
+    pub fn hash(&self) -> String {
+        match self {
+            Self::Blob(blob) => {
+                let mut hasher = Sha1::new();
+                let size = blob.len();
+                hasher.update(format!("blob {size}\0"));
+                let hasher = hasher.chain_update(blob);
+                hex::encode(hasher.finalize())
+            }
+        }
+    }
+
+    pub fn write(self) -> Result<()> {
+        let hash = self.hash();
+        let path = Self::path(&hash)?;
+
+        if let Some(dir) = path.as_path().parent() {
+            if !dir.exists() {
+                fs::create_dir(dir)?;
+            }
+        }
+
+        let f = File::create(path)?;
+        let mut e = ZlibEncoder::new(f, Compression::default());
+
+        match self {
+            Self::Blob(blob) => {
+                let size = blob.len();
+                e.write_all(format!("blob {size}\0").as_bytes())?;
+                e.write_all(blob.as_ref())?;
+                e.finish()?;
+                Ok(())
+            }
+        }
+    }
+
+    fn path(hash: &str) -> Result<PathBuf> {
         if hash.len() != 40 {
             return Err(anyhow::anyhow!("SHA-1 hash must be 40-characters long").into());
         }
 
-        Ok(format!("{}/{}/{}", GIT_OBJ_DIR, &hash[..2], &hash[2..]))
+        Ok(format!("{}/{}/{}", GIT_OBJ_DIR, &hash[..2], &hash[2..]).into())
     }
 
     fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -81,7 +124,7 @@ mod tests {
         let hash = "e88f7a929cd70b0274c4ea33b209c97fa845fdbc";
         assert_eq!(
             GitObject::path(hash).unwrap(),
-            ".git/objects/e8/8f7a929cd70b0274c4ea33b209c97fa845fdbc"
+            PathBuf::from(".git/objects/e8/8f7a929cd70b0274c4ea33b209c97fa845fdbc")
         );
     }
 
@@ -93,5 +136,16 @@ mod tests {
             obj.unwrap(),
             GitObject::Blob(Blob::from(Bytes::from_static(b"hello world")))
         );
+    }
+
+    #[test]
+    fn it_calculates_sha1_hash() {
+        let bytes = b"blob 11\0hello world";
+        let mut hasher = Sha1::new();
+        hasher.update(bytes);
+        let expected = hex::encode(hasher.finalize());
+
+        let obj = GitObject::new(bytes.to_vec()).unwrap();
+        assert_eq!(obj.hash(), expected);
     }
 }

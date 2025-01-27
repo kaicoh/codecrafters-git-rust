@@ -1,4 +1,3 @@
-use flate2::DecompressError;
 use std::io;
 use thiserror::Error as ThisError;
 
@@ -9,9 +8,6 @@ pub enum Error {
 
     #[error("ERR - Invalid arguments: {0}")]
     InvalidArgs(String),
-
-    #[error("ERR - Zlib Decompress: {0}")]
-    ZlibDecompress(#[from] DecompressError),
 
     #[error("ERR - Other: {0}")]
     Other(#[from] anyhow::Error),

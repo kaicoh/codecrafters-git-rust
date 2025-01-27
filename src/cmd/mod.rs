@@ -1,4 +1,5 @@
 mod cat_file;
+mod hash_object;
 mod init;
 
 use super::{Args, Error, GitObject, Result, GIT_DIR, GIT_OBJ_DIR, GIT_REF_DIR};
@@ -7,6 +8,7 @@ use super::{Args, Error, GitObject, Result, GIT_DIR, GIT_OBJ_DIR, GIT_REF_DIR};
 pub enum Command {
     Init,
     CatFile { hash: String },
+    HashObject { path: String },
     Unknown,
 }
 
@@ -21,6 +23,13 @@ impl Command {
                     .ok_or(Error::from(anyhow::anyhow!("argument \"p\" is required")))?;
                 Self::CatFile { hash }
             }
+            Some("hash-object") => {
+                let args = Args::new(&args[1..]);
+                let path = args
+                    .value("w")
+                    .ok_or(Error::from(anyhow::anyhow!("argument \"w\" is required")))?;
+                Self::HashObject { path }
+            }
             _ => Self::Unknown,
         };
         Ok(cmd)
@@ -30,6 +39,7 @@ impl Command {
         match self {
             Self::Init => init::run(),
             Self::CatFile { hash } => cat_file::run(hash),
+            Self::HashObject { path } => hash_object::run(path),
             Self::Unknown => Err(anyhow::anyhow!("Unknown command").into()),
         }
     }
