@@ -43,7 +43,7 @@ impl GitObject {
         let path = Self::path(&hash)?;
 
         if let Some(dir) = path.as_path().parent() {
-            if !dir.exists() {
+            if !dir.try_exists()? {
                 fs::create_dir(dir)?;
             }
         }
