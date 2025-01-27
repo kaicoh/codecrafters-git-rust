@@ -1,37 +1,93 @@
 use std::collections::HashMap;
 
-#[derive(Debug)]
-pub(crate) struct Args(HashMap<String, Vec<String>>);
+#[derive(Debug, Default)]
+pub(crate) struct ArgsBuilder {
+    positions: Vec<(usize, String)>,
+    flags: Vec<String>,
+    single_args: Vec<String>,
+}
 
-impl Args {
-    pub(crate) fn new(args: &[String]) -> Self {
-        let mut hashmap: HashMap<String, Vec<String>> = HashMap::new();
-        let mut key: Option<String> = None;
+impl ArgsBuilder {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
 
-        for token in args {
-            if token.as_str().starts_with("-") {
-                key = Some(token[1..].into());
-            } else if let Some(k) = key.as_ref() {
-                match hashmap.get_mut(k) {
-                    Some(values) => {
-                        values.push(token.into());
-                    }
-                    None => {
-                        hashmap.insert(k.into(), vec![token.into()]);
-                    }
-                }
+    pub(crate) fn position(mut self, pos: usize, name: &str) -> Self {
+        self.positions.push((pos, name.into()));
+        self
+    }
+
+    pub(crate) fn flag(mut self, name: &str) -> Self {
+        self.flags.push(name.into());
+        self
+    }
+
+    pub(crate) fn arg(mut self, name: &str) -> Self {
+        self.single_args.push(name.into());
+        self
+    }
+
+    pub(crate) fn build(self, args: &[String]) -> Args {
+        let mut map: HashMap<String, ArgValue> = HashMap::new();
+        let mut args = args.to_vec();
+        let Self {
+            mut positions,
+            flags,
+            single_args,
+        } = self;
+
+        for flag in flags {
+            if let Some(pos) = args.iter().position(|v| v.as_str() == flag.as_str()) {
+                args.remove(pos);
+                map.insert(flag, ArgValue::Bool(true));
             }
         }
-        Self(hashmap)
+
+        for single_arg in single_args {
+            if let Some(pos) = args.iter().position(|v| v.as_str() == single_arg.as_str()) {
+                args.remove(pos);
+                let value = args.remove(pos);
+                map.insert(single_arg, ArgValue::String(value));
+            }
+        }
+
+        positions.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, name) in positions {
+            if let Some(value) = args.pop() {
+                map.insert(name, ArgValue::String(value));
+            }
+        }
+
+        Args(map)
+    }
+}
+
+#[derive(Debug)]
+enum ArgValue {
+    Bool(bool),
+    String(String),
+}
+
+#[derive(Debug)]
+pub(crate) struct Args(HashMap<String, ArgValue>);
+
+impl Args {
+    pub(crate) fn builder() -> ArgsBuilder {
+        ArgsBuilder::new()
+    }
+
+    pub(crate) fn flag(&self, key: &str) -> bool {
+        match self.0.get(key) {
+            Some(ArgValue::Bool(v)) => *v,
+            _ => false,
+        }
     }
 
     pub(crate) fn value(&self, key: &str) -> Option<String> {
-        self.0.get(key).and_then(|v| v.iter().next()).cloned()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn values(&self, key: &str) -> Vec<String> {
-        self.0.get(key).map(|v| v.to_vec()).unwrap_or_default()
+        match self.0.get(key) {
+            Some(ArgValue::String(v)) => Some(v.into()),
+            _ => None,
+        }
     }
 }
 
@@ -41,37 +97,46 @@ mod tests {
 
     #[test]
     fn it_parses_arg_with_single_values() {
-        let args = vec!["-p".to_string(), "/foo/bar".to_string()];
-        let args = Args::new(&args);
-        assert_eq!(args.value("p"), Some("/foo/bar".into()));
+        let values = vec!["-p".to_string(), "/foo/bar".to_string()];
+        let args = Args::builder().arg("-p").build(&values);
+        assert_eq!(args.value("-p"), Some("/foo/bar".into()));
         assert_eq!(args.value("no_key"), None);
     }
 
     #[test]
-    fn it_parses_arg_with_multiple_values() {
-        let args = vec!["-p".to_string(), "/foo".to_string(), "/bar".to_string()];
-        let args = Args::new(&args);
-        assert_eq!(
-            args.values("p"),
-            vec!["/foo".to_string(), "/bar".to_string()]
-        );
-        assert_eq!(args.values("no_key"), Vec::<String>::new());
+    fn it_parses_flag_arg() {
+        let values = vec!["--foo".to_string()];
+        let args = Args::builder().flag("--foo").flag("--bar").build(&values);
+        assert!(args.flag("--foo"));
+        assert!(!args.flag("--bar"));
+    }
+
+    #[test]
+    fn it_parses_position_args() {
+        let values = vec!["foo.csv".to_string()];
+        let args = Args::builder()
+            .position(0, "file")
+            .position(1, "notfound")
+            .build(&values);
+        assert_eq!(args.value("file"), Some("foo.csv".into()));
+        assert_eq!(args.value("notfound"), None);
     }
 
     #[test]
     fn it_parses_multiple_args() {
-        let args = vec![
-            "-p".to_string(),
-            "/foo".to_string(),
-            "-f".to_string(),
-            "foo.csv".to_string(),
-            "bar.csv".to_string(),
+        let values = vec![
+            "--foobar".to_string(),
+            "-d".to_string(),
+            "/barbaz".to_string(),
+            "foobarbaz.csv".to_string(),
         ];
-        let args = Args::new(&args);
-        assert_eq!(args.value("p"), Some("/foo".into()));
-        assert_eq!(
-            args.values("f"),
-            vec!["foo.csv".to_string(), "bar.csv".to_string()]
-        );
+        let args = Args::builder()
+            .flag("--foobar")
+            .arg("-d")
+            .position(0, "file")
+            .build(&values);
+        assert!(args.flag("--foobar"));
+        assert_eq!(args.value("-d"), Some("/barbaz".into()));
+        assert_eq!(args.value("file"), Some("foobarbaz.csv".into()));
     }
 }

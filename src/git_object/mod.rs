@@ -26,21 +26,21 @@ impl GitObject {
         Ok(Self::Blob(Blob::from(Bytes::from_iter(buf))))
     }
 
-    pub fn hash(&self) -> String {
+    pub fn hash(&self) -> Vec<u8> {
         match self {
             Self::Blob(blob) => {
                 let mut hasher = Sha1::new();
                 let size = blob.len();
                 hasher.update(format!("blob {size}\0"));
                 let hasher = hasher.chain_update(blob);
-                hex::encode(hasher.finalize())
+                hasher.finalize().to_vec()
             }
         }
     }
 
     pub fn write(self) -> Result<()> {
         let hash = self.hash();
-        let path = Self::path(&hash)?;
+        let path = Self::path(&hex::encode(hash))?;
 
         if let Some(dir) = path.as_path().parent() {
             if !dir.try_exists()? {
@@ -146,6 +146,7 @@ mod tests {
         let expected = hex::encode(hasher.finalize());
 
         let obj = GitObject::new(bytes.to_vec()).unwrap();
-        assert_eq!(obj.hash(), expected);
+        let hash = hex::encode(obj.hash());
+        assert_eq!(hash, expected);
     }
 }
