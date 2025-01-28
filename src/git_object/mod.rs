@@ -1,9 +1,11 @@
 mod blob;
+mod commit;
 mod tree;
 
 use super::{Error, Result, GIT_OBJ_DIR};
 use blob::Blob;
 use bytes::Bytes;
+use commit::Commit;
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use sha1::{Digest, Sha1};
 use std::ffi::OsStr;
@@ -17,6 +19,7 @@ use tree::{Tree, TreeRecords};
 pub enum GitObject {
     Blob(Blob),
     Tree(Vec<Tree>),
+    Commit(Commit),
 }
 
 impl GitObject {
@@ -47,6 +50,10 @@ impl GitObject {
         Ok(Self::Tree(trees))
     }
 
+    pub fn new_commit(tree: String, comment: String, parent: Option<String>) -> Result<Self> {
+        Ok(Self::Commit(Commit::new(tree, comment, parent)))
+    }
+
     pub fn hash(&self) -> Vec<u8> {
         let mut hasher = Sha1::new();
         hasher.update(self.header());
@@ -59,6 +66,9 @@ impl GitObject {
                 for tree in trees {
                     hasher = hasher.chain_update(tree.serialize());
                 }
+            }
+            Self::Commit(commit) => {
+                hasher = hasher.chain_update(commit.serialize());
             }
         }
 
@@ -87,6 +97,9 @@ impl GitObject {
                 for tree in trees {
                     e.write_all(&tree.serialize())?;
                 }
+            }
+            Self::Commit(commit) => {
+                e.write_all(&commit.serialize())?;
             }
         }
 
@@ -117,6 +130,7 @@ impl GitObject {
         match self {
             Self::Blob(blob) => blob.len(),
             Self::Tree(trees) => trees.iter().map(Tree::len).sum(),
+            Self::Commit(commit) => commit.len(),
         }
     }
 
@@ -125,6 +139,7 @@ impl GitObject {
         match self {
             Self::Blob(_) => format!("blob {size}\0"),
             Self::Tree(_) => format!("tree {size}\0"),
+            Self::Commit(_) => format!("commit {size}\0"),
         }
     }
 
@@ -180,7 +195,13 @@ impl fmt::Display for GitObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Blob(blob) => blob.fmt(f),
-            Self::Tree(_trees) => unimplemented!(),
+            Self::Tree(trees) => {
+                for tree in trees {
+                    writeln!(f, "{tree}")?;
+                }
+                Ok(())
+            }
+            Self::Commit(_) => unimplemented!(),
         }
     }
 }
