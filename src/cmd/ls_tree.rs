@@ -1,5 +1,7 @@
-use super::Result;
+use super::{GitObject, Result};
 
-pub fn run(_hash: String, _name_only: bool) -> Result<()> {
-    unimplemented!()
+pub fn run(hash: String, name_only: bool) -> Result<()> {
+    let obj = GitObject::open_from_hash(&hash)?;
+    obj.print_trees(name_only);
+    Ok(())
 }

@@ -1,4 +1,5 @@
 mod blob;
+mod tree;
 
 use super::{Error, Result, GIT_OBJ_DIR};
 use blob::Blob;
@@ -9,10 +10,12 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use tree::{Tree, TreeRecords};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GitObject {
     Blob(Blob),
+    Tree(Vec<Tree>),
 }
 
 impl GitObject {
@@ -27,15 +30,24 @@ impl GitObject {
     }
 
     pub fn hash(&self) -> Vec<u8> {
+        let mut hasher = Sha1::new();
+
         match self {
             Self::Blob(blob) => {
-                let mut hasher = Sha1::new();
                 let size = blob.len();
                 hasher.update(format!("blob {size}\0"));
-                let hasher = hasher.chain_update(blob);
-                hasher.finalize().to_vec()
+                hasher = hasher.chain_update(blob);
+            }
+            Self::Tree(trees) => {
+                let size: usize = trees.iter().map(Tree::len).sum();
+                hasher.update(format!("tree {size}\0"));
+                for tree in trees {
+                    hasher = hasher.chain_update(tree.serialize());
+                }
             }
         }
+
+        hasher.finalize().to_vec()
     }
 
     pub fn write(self) -> Result<()> {
@@ -58,6 +70,25 @@ impl GitObject {
                 e.write_all(blob.as_ref())?;
                 e.finish()?;
                 Ok(())
+            }
+            Self::Tree(_trees) => {
+                unimplemented!()
+            }
+        }
+    }
+
+    pub fn print_trees(&self, name_only: bool) {
+        if let Self::Tree(ref trees) = self {
+            let mut trees = trees.to_vec();
+            trees.sort_by(|a, b| a.name().cmp(b.name()));
+
+            for tree in trees {
+                let print = if name_only {
+                    tree.name().into()
+                } else {
+                    format!("{tree}")
+                };
+                println!("{print}");
             }
         }
     }
@@ -97,6 +128,13 @@ impl GitObject {
                 })?;
             let bytes = Bytes::copy_from_slice(&data[(zero_pos + 1)..(zero_pos + 1 + size)]);
             Ok(Self::Blob(Blob::from(bytes)))
+        // NOTE:
+        // The tree file is like "tree <size>\0...."
+        } else if data.starts_with(b"tree") {
+            let zero_pos =
+                zero_position(&data[..]).ok_or(Error::from("Not found \0 in git object file"))?;
+            let trees = TreeRecords::new(&data[(zero_pos + 1)..]).collect::<Vec<Tree>>();
+            Ok(Self::Tree(trees))
         } else {
             unimplemented!()
         }
@@ -107,12 +145,22 @@ impl fmt::Display for GitObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Blob(blob) => blob.fmt(f),
+            Self::Tree(_trees) => unimplemented!(),
         }
     }
 }
 
+type GetPosition = Box<dyn Fn(&[u8]) -> Option<usize>>;
+fn position(byte: u8) -> GetPosition {
+    Box::new(move |bytes: &[u8]| bytes.iter().position(|&b| b == byte))
+}
+
 fn zero_position(bytes: &[u8]) -> Option<usize> {
-    bytes.iter().position(|&b| b == b'\0')
+    position(b'\0')(bytes)
+}
+
+fn space_position(bytes: &[u8]) -> Option<usize> {
+    position(b' ')(bytes)
 }
 
 #[cfg(test)]
