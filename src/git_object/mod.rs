@@ -74,19 +74,22 @@ impl GitObject {
         Ok(())
     }
 
-    pub fn print_trees(&self, name_only: bool) {
+    pub fn print_trees(&self, name_only: bool) -> Vec<String> {
         if let Self::Tree(ref trees) = self {
             let mut trees = trees.to_vec();
             trees.sort_by(|a, b| a.name().cmp(b.name()));
-
-            for tree in trees {
-                let print = if name_only {
-                    tree.name().into()
-                } else {
-                    format!("{tree}")
-                };
-                println!("{print}");
-            }
+            trees
+                .into_iter()
+                .map(|tree| {
+                    if name_only {
+                        tree.name().into()
+                    } else {
+                        format!("{tree}")
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
         }
     }
 
