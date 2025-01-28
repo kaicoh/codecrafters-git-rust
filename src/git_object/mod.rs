@@ -31,16 +31,13 @@ impl GitObject {
 
     pub fn hash(&self) -> Vec<u8> {
         let mut hasher = Sha1::new();
+        hasher.update(self.header());
 
         match self {
             Self::Blob(blob) => {
-                let size = blob.len();
-                hasher.update(format!("blob {size}\0"));
                 hasher = hasher.chain_update(blob);
             }
             Self::Tree(trees) => {
-                let size: usize = trees.iter().map(Tree::len).sum();
-                hasher.update(format!("tree {size}\0"));
                 for tree in trees {
                     hasher = hasher.chain_update(tree.serialize());
                 }
@@ -62,19 +59,19 @@ impl GitObject {
 
         let f = File::create(path)?;
         let mut e = ZlibEncoder::new(f, Compression::default());
+        e.write_all(self.header().as_bytes())?;
 
         match self {
             Self::Blob(blob) => {
-                let size = blob.len();
-                e.write_all(format!("blob {size}\0").as_bytes())?;
                 e.write_all(blob.as_ref())?;
-                e.finish()?;
-                Ok(())
             }
             Self::Tree(_trees) => {
                 unimplemented!()
             }
         }
+
+        e.finish()?;
+        Ok(())
     }
 
     pub fn print_trees(&self, name_only: bool) {
@@ -90,6 +87,21 @@ impl GitObject {
                 };
                 println!("{print}");
             }
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            Self::Blob(blob) => blob.len(),
+            Self::Tree(trees) => trees.iter().map(Tree::len).sum(),
+        }
+    }
+
+    fn header(&self) -> String {
+        let size = self.size();
+        match self {
+            Self::Blob(_) => format!("blob {size}\0"),
+            Self::Tree(_) => format!("tree {size}\0"),
         }
     }
 
