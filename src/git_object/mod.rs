@@ -6,8 +6,9 @@ use blob::Blob;
 use bytes::Bytes;
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use sha1::{Digest, Sha1};
+use std::ffi::OsStr;
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::{self, DirEntry, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tree::{Tree, TreeRecords};
@@ -27,6 +28,23 @@ impl GitObject {
         let mut buf = vec![];
         content.read_to_end(&mut buf)?;
         Ok(Self::Blob(Blob::from(Bytes::from_iter(buf))))
+    }
+
+    pub fn new_tree<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let mut trees: Vec<Tree> = vec![];
+
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+
+            if !is_git_file(&entry) {
+                let tree = Tree::try_from(entry)?;
+                trees.push(tree);
+            }
+        }
+
+        trees.sort();
+
+        Ok(Self::Tree(trees))
     }
 
     pub fn hash(&self) -> Vec<u8> {
@@ -65,8 +83,10 @@ impl GitObject {
             Self::Blob(blob) => {
                 e.write_all(blob.as_ref())?;
             }
-            Self::Tree(_trees) => {
-                unimplemented!()
+            Self::Tree(trees) => {
+                for tree in trees {
+                    e.write_all(&tree.serialize())?;
+                }
             }
         }
 
@@ -77,7 +97,7 @@ impl GitObject {
     pub fn print_trees(&self, name_only: bool) -> Vec<String> {
         if let Self::Tree(ref trees) = self {
             let mut trees = trees.to_vec();
-            trees.sort_by(|a, b| a.name().cmp(b.name()));
+            trees.sort();
             trees
                 .into_iter()
                 .map(|tree| {
@@ -176,6 +196,16 @@ fn zero_position(bytes: &[u8]) -> Option<usize> {
 
 fn space_position(bytes: &[u8]) -> Option<usize> {
     position(b' ')(bytes)
+}
+
+fn is_git_file(entry: &DirEntry) -> bool {
+    let path = entry.path();
+    path.ancestors().any(is_git_root)
+}
+
+fn is_git_root<P: AsRef<Path>>(path: P) -> bool {
+    let git_root = OsStr::new(".git");
+    path.as_ref().file_name().is_some_and(|v| v == git_root)
 }
 
 #[cfg(test)]

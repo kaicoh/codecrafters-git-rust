@@ -2,6 +2,7 @@ mod cat_file;
 mod hash_object;
 mod init;
 mod ls_tree;
+mod write_tree;
 
 use super::{Args, Error, GitObject, Result, GIT_DIR, GIT_OBJ_DIR, GIT_REF_DIR};
 
@@ -11,6 +12,7 @@ pub enum Command {
     CatFile { hash: String },
     HashObject { path: String },
     LsTree { hash: String, name_only: bool },
+    WriteTree,
     Unknown,
 }
 
@@ -44,6 +46,7 @@ impl Command {
 
                 Self::LsTree { name_only, hash }
             }
+            Some("write-tree") => Self::WriteTree,
             _ => Self::Unknown,
         };
         Ok(cmd)
@@ -55,6 +58,7 @@ impl Command {
             Self::CatFile { hash } => cat_file::run(hash),
             Self::HashObject { path } => hash_object::run(path),
             Self::LsTree { hash, name_only } => ls_tree::run(hash, name_only),
+            Self::WriteTree => write_tree::run(),
             Self::Unknown => Err(anyhow::anyhow!("Unknown command").into()),
         }
     }

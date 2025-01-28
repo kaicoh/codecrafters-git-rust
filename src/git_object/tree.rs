@@ -1,7 +1,9 @@
-use super::{space_position, zero_position};
+use super::{space_position, zero_position, Error, GitObject};
 use sha1::{Digest, Sha1};
 use std::{
+    cmp::Ordering,
     fmt,
+    fs::{DirEntry, File},
     io::{Cursor, Read},
 };
 
@@ -9,11 +11,13 @@ const SHA_SIZE: usize = 20;
 const MODE_DIR: isize = 40000;
 const MODE_FILE: isize = 100644;
 
-#[derive(Debug, Clone, PartialEq)]
+type Sha1Hash = [u8; SHA_SIZE];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tree {
     mode: Mode,
     name: String,
-    hash: [u8; SHA_SIZE],
+    hash: Sha1Hash,
 }
 
 impl Tree {
@@ -53,6 +57,49 @@ impl Tree {
     }
 }
 
+impl TryFrom<DirEntry> for Tree {
+    type Error = Error;
+
+    fn try_from(entry: DirEntry) -> Result<Self, Self::Error> {
+        let path = entry.path();
+        let name = format!("{}", entry.file_name().to_string_lossy());
+        let (mode, hash) = if path.is_dir() {
+            let obj = GitObject::new_tree(path)?;
+            (Mode::Directory, obj.hash())
+        } else if path.is_file() {
+            let f = File::open(path)?;
+            let obj = GitObject::new_blob(f)?;
+            (Mode::File, obj.hash())
+        } else {
+            return Err(Error::from(anyhow::anyhow!(
+                "DirEntry is neither directory nor file."
+            )));
+        };
+
+        Ok(Self {
+            mode,
+            name,
+            hash: hash.try_into().map_err(|err| {
+                Error::from(anyhow::anyhow!(
+                    "Git object hash must be 20-bytes long. {err:?}"
+                ))
+            })?,
+        })
+    }
+}
+
+impl PartialOrd for Tree {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.name().cmp(other.name()))
+    }
+}
+
+impl Ord for Tree {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name().cmp(other.name())
+    }
+}
+
 impl fmt::Display for Tree {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut hasher = Sha1::new();
@@ -73,7 +120,7 @@ impl fmt::Display for Tree {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum Mode {
     File = MODE_FILE,
     Directory = MODE_DIR,
