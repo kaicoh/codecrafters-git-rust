@@ -52,9 +52,9 @@ impl ArgsBuilder {
         }
 
         positions.sort_by(|a, b| a.0.cmp(&b.0));
-        for (_, name) in positions {
-            if let Some(value) = args.pop() {
-                map.insert(name, ArgValue::String(value));
+        for (pos, name) in positions {
+            if let Some(value) = args.get(pos) {
+                map.insert(name, ArgValue::String(value.into()));
             }
         }
 
@@ -138,5 +138,16 @@ mod tests {
         assert!(args.flag("--foobar"));
         assert_eq!(args.value("-d"), Some("/barbaz".into()));
         assert_eq!(args.value("file"), Some("foobarbaz.csv".into()));
+    }
+
+    #[test]
+    fn it_parses_multiple_positional_args() {
+        let values = vec!["foobar".to_string(), "foobarbaz".to_string()];
+        let args = Args::builder()
+            .position(0, "url")
+            .position(1, "dir")
+            .build(&values);
+        assert_eq!(args.value("url"), Some("foobar".into()));
+        assert_eq!(args.value("dir"), Some("foobarbaz".into()));
     }
 }

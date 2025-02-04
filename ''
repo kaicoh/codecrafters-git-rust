@@ -2,7 +2,7 @@ pub mod blob;
 pub mod commit;
 pub mod tree;
 
-use super::{git_protocol::Delta, Error, Result, Sha1Hash, GIT_OBJ_DIR, SHA1_HASH_SIZE};
+use super::{Error, Result, Sha1Hash, GIT_OBJ_DIR, SHA1_HASH_SIZE};
 use blob::Blob;
 use bytes::Bytes;
 use commit::Commit;
@@ -118,14 +118,6 @@ impl GitObject {
         } else {
             vec![]
         }
-    }
-
-    pub fn restore(&self, delta: Delta) -> Result<Self> {
-        let mut buf: Vec<u8> = vec![];
-        let mut header = self.header().into_bytes();
-        buf.append(&mut header);
-        buf.append(&mut delta.restore(&self.serialize()));
-        Self::new(buf)
     }
 
     fn size(&self) -> usize {

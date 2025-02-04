@@ -1,5 +1,6 @@
-use super::{space_position, zero_position, Error, GitObject};
-use sha1::{Digest, Sha1};
+use super::{space_position, zero_position, Error, GitObject, Sha1Hash, SHA1_HASH_SIZE};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     cmp::Ordering,
     fmt,
@@ -7,20 +8,20 @@ use std::{
     io::{Cursor, Read},
 };
 
-const SHA_SIZE: usize = 20;
 const MODE_DIR: isize = 40000;
 const MODE_FILE: isize = 100644;
-
-type Sha1Hash = [u8; SHA_SIZE];
+const MODE_SYML: isize = 120000;
+#[cfg(unix)]
+const MODE_EXEC: isize = 100755;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tree {
+pub struct TreeNode {
     mode: Mode,
     name: String,
     hash: Sha1Hash,
 }
 
-impl Tree {
+impl TreeNode {
     fn new(buf: &[u8]) -> Self {
         let sp_pos = space_position(buf).expect("buf must have space");
         let zero_pos = zero_position(buf).expect("buf must have \0");
@@ -29,6 +30,9 @@ impl Tree {
         let mode = match mode_str.parse::<isize>() {
             Ok(MODE_FILE) => Mode::File,
             Ok(MODE_DIR) => Mode::Directory,
+            Ok(MODE_SYML) => Mode::Symlink,
+            #[cfg(unix)]
+            Ok(MODE_EXEC) => Mode::Executable,
             _ => panic!("Unknown mode: {mode_str}"),
         };
 
@@ -47,9 +51,13 @@ impl Tree {
         self.name.as_str()
     }
 
+    pub fn hash(&self) -> Sha1Hash {
+        self.hash
+    }
+
     pub fn serialize(&self) -> Vec<u8> {
         let header = format!("{} {}\0", self.mode as isize, self.name);
-        [header.as_bytes().to_vec(), self.hash.to_vec()].concat()
+        [header.as_bytes(), self.hash.as_bytes()].concat()
     }
 
     pub fn len(&self) -> usize {
@@ -57,7 +65,7 @@ impl Tree {
     }
 }
 
-impl TryFrom<DirEntry> for Tree {
+impl TryFrom<DirEntry> for TreeNode {
     type Error = Error;
 
     fn try_from(entry: DirEntry) -> Result<Self, Self::Error> {
@@ -68,43 +76,41 @@ impl TryFrom<DirEntry> for Tree {
             (Mode::Directory, obj.hash())
         } else if path.is_file() {
             let f = File::open(path)?;
+            let mode = if cfg!(unix) {
+                Mode::from_file(&f)
+            } else {
+                Mode::File
+            };
             let obj = GitObject::new_blob(f)?;
-            (Mode::File, obj.hash())
+            (mode, obj.hash())
+        } else if path.is_symlink() {
+            let f = File::open(path)?;
+            let obj = GitObject::new_blob(f)?;
+            (Mode::Symlink, obj.hash())
         } else {
             return Err(Error::from(anyhow::anyhow!(
-                "DirEntry is neither directory nor file."
+                "DirEntry is not directory, file or symlink."
             )));
         };
 
-        Ok(Self {
-            mode,
-            name,
-            hash: hash.try_into().map_err(|err| {
-                Error::from(anyhow::anyhow!(
-                    "Git object hash must be 20-bytes long. {err:?}"
-                ))
-            })?,
-        })
+        Ok(Self { mode, name, hash })
     }
 }
 
-impl PartialOrd for Tree {
+impl PartialOrd for TreeNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.name().cmp(other.name()))
     }
 }
 
-impl Ord for Tree {
+impl Ord for TreeNode {
     fn cmp(&self, other: &Self) -> Ordering {
         self.name().cmp(other.name())
     }
 }
 
-impl fmt::Display for Tree {
+impl fmt::Display for TreeNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut hasher = Sha1::new();
-        hasher.update(self.hash);
-        let hash = hex::encode(hasher.finalize());
         write!(
             f,
             "{:06} {} {}    {}",
@@ -114,7 +120,7 @@ impl fmt::Display for Tree {
             } else {
                 "blob"
             },
-            hash,
+            self.hash.hex(),
             self.name,
         )
     }
@@ -124,6 +130,23 @@ impl fmt::Display for Tree {
 enum Mode {
     File = MODE_FILE,
     Directory = MODE_DIR,
+    Symlink = MODE_SYML,
+    #[cfg(unix)]
+    Executable = MODE_EXEC,
+}
+
+impl Mode {
+    #[cfg(unix)]
+    fn from_file(file: &File) -> Self {
+        if file
+            .metadata()
+            .is_ok_and(|meta| meta.permissions().mode() == 0o755)
+        {
+            Self::Executable
+        } else {
+            Self::File
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -140,7 +163,7 @@ impl<'a> TreeRecords<'a> {
 }
 
 impl Iterator for TreeRecords<'_> {
-    type Item = Tree;
+    type Item = TreeNode;
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.cursor.position() as usize;
@@ -148,7 +171,7 @@ impl Iterator for TreeRecords<'_> {
 
         // \0 position from the current position
         let zero_pos = zero_position(&bytes[current..])?;
-        let tree_size = zero_pos + SHA_SIZE + 1;
+        let tree_size = zero_pos + SHA1_HASH_SIZE + 1;
         let mut buf: Vec<u8> = vec![0; tree_size];
         self.cursor
             .read_exact(&mut buf)
@@ -156,7 +179,7 @@ impl Iterator for TreeRecords<'_> {
                 eprintln!("Err reading tree object. {err}");
             })
             .ok()?;
-        Some(Tree::new(&buf))
+        Some(TreeNode::new(&buf))
     }
 }
 
@@ -167,11 +190,11 @@ mod tests {
     #[test]
     fn it_creates_file_tree() {
         let bytes = b"100644 file1\x0011111111111111111111";
-        let tree = Tree::new(bytes);
-        let expected = Tree {
+        let tree = TreeNode::new(bytes);
+        let expected = TreeNode {
             mode: Mode::File,
             name: "file1".into(),
-            hash: [b'1'; 20],
+            hash: [b'1'; 20].into(),
         };
         assert_eq!(tree, expected);
     }
@@ -179,11 +202,11 @@ mod tests {
     #[test]
     fn it_creates_dir_tree() {
         let bytes = b"40000 dir1\x0099999999999999999999";
-        let tree = Tree::new(bytes);
-        let expected = Tree {
+        let tree = TreeNode::new(bytes);
+        let expected = TreeNode {
             mode: Mode::Directory,
             name: "dir1".into(),
-            hash: [b'9'; 20],
+            hash: [b'9'; 20].into(),
         };
         assert_eq!(tree, expected);
     }
@@ -194,18 +217,18 @@ mod tests {
         let mut trees = TreeRecords::new(bytes);
 
         let tree = trees.next().unwrap();
-        let expected = Tree {
+        let expected = TreeNode {
             mode: Mode::File,
             name: "file1".into(),
-            hash: [b'1'; 20],
+            hash: [b'1'; 20].into(),
         };
         assert_eq!(tree, expected);
 
         let tree = trees.next().unwrap();
-        let expected = Tree {
+        let expected = TreeNode {
             mode: Mode::Directory,
             name: "dir1".into(),
-            hash: [b'9'; 20],
+            hash: [b'9'; 20].into(),
         };
         assert_eq!(tree, expected);
 

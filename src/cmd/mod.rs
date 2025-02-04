@@ -1,11 +1,14 @@
 mod cat_file;
+mod clone;
 mod commit_tree;
 mod hash_object;
 mod init;
 mod ls_tree;
 mod write_tree;
 
-use super::{Args, Error, GitObject, Result, GIT_DIR, GIT_OBJ_DIR, GIT_REF_DIR};
+use super::{
+    git_protocol, tree, Args, Error, GitObject, Result, GIT_DIR, GIT_OBJ_DIR, GIT_REF_DIR,
+};
 
 #[derive(Debug)]
 pub enum Command {
@@ -25,6 +28,10 @@ pub enum Command {
         tree: String,
         comment: String,
         parent: Option<String>,
+    },
+    Clone {
+        url: String,
+        dir: String,
     },
     Unknown,
 }
@@ -79,14 +86,27 @@ impl Command {
                     parent,
                 }
             }
+            Some("clone") => {
+                let args = Args::builder()
+                    .position(0, "url")
+                    .position(1, "dir")
+                    .build(&args[1..]);
+                let url = args
+                    .value("url")
+                    .ok_or(Error::from("position argument url is required"))?;
+                let dir = args
+                    .value("dir")
+                    .ok_or(Error::from("position argument dir is required"))?;
+                Self::Clone { url, dir }
+            }
             _ => Self::Unknown,
         };
         Ok(cmd)
     }
 
-    pub fn run(self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         match self {
-            Self::Init => init::run(),
+            Self::Init => init::run("."),
             Self::CatFile { hash } => cat_file::run(hash),
             Self::HashObject { path } => hash_object::run(path),
             Self::LsTree { hash, name_only } => ls_tree::run(hash, name_only),
@@ -96,6 +116,7 @@ impl Command {
                 comment,
                 parent,
             } => commit_tree::run(tree, comment, parent),
+            Self::Clone { url, dir } => clone::run(url, dir).await,
             Self::Unknown => Err(anyhow::anyhow!("Unknown command").into()),
         }
     }
